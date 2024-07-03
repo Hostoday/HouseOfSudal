@@ -3,10 +3,6 @@
 
 학습, 추론의 실행 방법(How to Run)은 아래에서 확인하실 수 있습니다.   
 
-|Model|Evaluation Score|ROUGE-1|bertscore|bluert|
-|:---|---|---|---|---|
-|MLP-KTLim/llama-3-Korean-Bllossom-8B (without SFT)|54.276|44.592|73.277|44.958|
-|MLP-KTLim/llama-3-Korean-Bllossom-8B (with SFT)|0.0|0.0|0.0|0.0|
 
 ## 리포지토리 구조 (Repository Structure)
 ```
@@ -22,6 +18,7 @@ run
 # 학습에 사용될 커스텀 함수들을 보관하는 디렉토리
 src
 ├── data.py     # Custom Dataset
+├── arg_parser.py #Parser
 └── utils.py
 ```
 
@@ -58,19 +55,12 @@ src
 ## 실행 방법 (How to Run)
 ### 학습 (Train)
 ```
-python -m run.train \
-    --model_id MLP-KTLim/llama-3-Korean-Bllossom-8B \
-    --epoch 5 \
-    --lr 2e-5 \
-    --gradient_accumulation_steps 64
+bash train.sh 로 train.sh파일을 수정해 가면 다양한 환경에서 실험 가능
 ```
 
 ### 추론 (Inference)
 ```
-python -m run.test \
-    --output result.json \
-    --model_id MLP-KTLim/llama-3-Korean-Bllossom-8B \
-    --device cuda:0
+bash inf.sh 로 train.sh파일을 수정해 가면 다양한 환경에서 실험 가능
 ```
 
 ## Reference
