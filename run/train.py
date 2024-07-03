@@ -5,7 +5,9 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, Trainer, TrainingArguments,TrainerControl, get_cosine_schedule_with_warmup, get_linear_schedule_with_warmup
+from transformers import (AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, 
+                          Trainer, TrainingArguments, get_cosine_schedule_with_warmup, 
+                          get_linear_schedule_with_warmup)
 from trl import SFTTrainer, SFTConfig
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
 from src.data import CustomDataset, DataCollatorForSupervisedDataset
@@ -14,7 +16,7 @@ from src.arg_parser import get_args
 from accelerate import Accelerator
 import wandb
 
-from transformers import TrainerCallback, TrainingArguments, Trainer, TrainerState, TrainerControl
+from transformers import TrainerCallback, TrainerState, TrainerControl
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -34,12 +36,12 @@ class CustomCallback(TrainerCallback):
 def init_model(args):
     """Initialize the model with 4-bit quantization and LoRA configuration."""
     quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                llm_int8_threshold=6.0,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type='nf4'
-                )
+        load_in_4bit=True,
+        llm_int8_threshold=6.0,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type='nf4'
+    )
     
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id,
@@ -49,12 +51,11 @@ def init_model(args):
     )
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
-        target_modules=["q_proj","v_proj","k_proj","o_proj","gate_proj","down_proj","up_proj"],
+        target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "down_proj", "up_proj"],
         r=8,
         lora_alpha=16,
         lora_dropout=0.05,
-        #modules_to_save=["embed_tokens","lm_head"]
-        )
+    )
     
     model.config.use_cache = False
     model.gradient_checkpointing_enable()
@@ -63,48 +64,34 @@ def init_model(args):
 
 def init_tokenizer(args):
     """Initialize the tokenizer."""
-    if args.tokenizer is None:
-        args.tokenizer = args.model_id
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer if args.tokenizer else args.model_id)
     tokenizer.padding_side = "left"
     tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
 
 def loss_fn(target, outputs, tokenizer):
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
-    logits = outputs.logits.view(-1, outputs.logits.size(-1))  # [batch_size * seq_len, vocab_size]
-    target = target.view(-1)  # [batch_size * seq_len]
-
+    logits = outputs.logits.view(-1, outputs.logits.size(-1))
+    target = target.view(-1)
     loss = criterion(logits, target)
     return loss
 
-def trainer(args):
+def train_model(args):
     model, peft_config = init_model(args)
-
-    # prepare model for training
     model = prepare_model_for_kbit_training(model)
     model = get_peft_model(model, peft_config)
-
     set_random_seed(args.seed)
-
     tokenizer = init_tokenizer(args)
 
     train_dataset = CustomDataset("resource/data/일상대화요약_train.json", tokenizer)
     valid_dataset = CustomDataset("resource/data/일상대화요약_dev.json", tokenizer)
 
-    train_dataset = Dataset.from_dict({
-        'input_ids': train_dataset.inp,
-        "labels": train_dataset.label,
-        })
-    valid_dataset = Dataset.from_dict({
-        'input_ids': valid_dataset.inp,
-        "labels": valid_dataset.label,
-        })
+    train_dataset = Dataset.from_dict({'input_ids': train_dataset.inp, 'labels': train_dataset.label})
+    valid_dataset = Dataset.from_dict({'input_ids': valid_dataset.inp, 'labels': valid_dataset.label})
     
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
 
-    tr_args = TrainingArguments(
-        #eval_strategy="epoch",
+    training_args = TrainingArguments(
         save_strategy="epoch",
         warmup_steps=10,
         weight_decay=0.01,
@@ -123,63 +110,47 @@ def trainer(args):
     trainer = Trainer(
         model=model,
         tokenizer=tokenizer,
-        args=tr_args,
+        args=training_args,
         train_dataset=train_dataset,
         data_collator=data_collator,
-        callbacks=[CustomCallback()],  # 커스텀 콜백 추가
+        callbacks=[CustomCallback()],
     )
     
     trainer.train()
     trainer.save_model()
 
-
 def main(args):
     accelerator = Accelerator()
-
-    """Train the model."""
-    model,peft_config = init_model(args)
-    #model.to(device)  # Ensure the model is moved to the specified device
-    
+    model, peft_config = init_model(args)
     set_random_seed(args.seed)
-
     tokenizer = init_tokenizer(args)
 
     train_dataset = CustomDataset("resource/data/일상대화요약_train.json", tokenizer)
     valid_dataset = CustomDataset("resource/data/일상대화요약_dev.json", tokenizer)
 
-    optimizer = AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-    )
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
+        train_dataset, batch_size=args.batch_size, shuffle=True,
         collate_fn=DataCollatorForSupervisedDataset(tokenizer)
     )
 
     valid_dataloader = torch.utils.data.DataLoader(
-        valid_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
+        valid_dataset, batch_size=args.batch_size, shuffle=False,
         collate_fn=DataCollatorForSupervisedDataset(tokenizer)
     )
 
     total_steps = len(train_dataloader) * args.epoch // args.gradient_accumulation_steps
-    if args.scheduler_type == "cosine":
-        scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps)
-    elif args.scheduler_type == "linear":
-        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps)
+    scheduler = (get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps) 
+                 if args.scheduler_type == "cosine" 
+                 else get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps))
     
-    model, optimizer, training_dataloader, scheduler = accelerator.prepare(
-          model, optimizer, training_dataloader, scheduler
-      )
-    
+    model, optimizer, train_dataloader, scheduler = accelerator.prepare(model, optimizer, train_dataloader, scheduler)
+
     step = 0
     best_eval_loss = float('inf')
     saved_models = []
+
     for ep in range(args.epoch):
         model.train()
         print(f"Epoch {ep + 1} 시작")
@@ -188,7 +159,6 @@ def main(args):
             labels = batch["labels"]
             outputs = model(inputs)
             loss = loss_fn(labels, outputs, tokenizer) / args.gradient_accumulation_steps
-            #loss.backward()
             accelerator.backward(loss)
             step += 1
             
@@ -200,10 +170,18 @@ def main(args):
                 optimizer.zero_grad()
 
         wandb.log({"epoch": ep+1})
-        model.save_pretrained(args.save_dir + f"/{ep+1}")       
+        
+        epoch_save_dir = os.path.join(args.save_dir, f"{ep+1}")
+        if not os.path.exists(epoch_save_dir):
+            os.makedirs(epoch_save_dir)
+
+        model.save_pretrained(epoch_save_dir)
+        tokenizer.save_pretrained(epoch_save_dir)
+        with open(os.path.join(epoch_save_dir, 'training_args.bin'), 'wb') as f:
+            torch.save(args, f)    
+            
         print(f"Epoch {ep + 1} 끝")
 
-        # Evaluation
         model.eval()
         eval_loss = 0
         with torch.no_grad():
@@ -218,14 +196,12 @@ def main(args):
         print(f"Validation Loss after Epoch {ep+1}: {avg_eval_loss}")
         wandb.log({"eval_loss": avg_eval_loss})
 
-        # Save the best models up to save_total_limit
         if avg_eval_loss < best_eval_loss:
             best_eval_loss = avg_eval_loss
             save_path = args.save_dir + f"/epoch_{ep+1}_loss_{avg_eval_loss:.4f}"
             model.save_pretrained(save_path)
             saved_models.append(save_path)
             
-            # Remove old models if exceed save_total_limit
             if len(saved_models) > args.save_total_limit:
                 model_to_remove = saved_models.pop(0)
                 if os.path.exists(model_to_remove):
@@ -243,6 +219,6 @@ if __name__ == "__main__":
     wandb.config.update(args)
     
     if args.trainer == "True":
-       exit(trainer(args)) 
+        exit(train_model(args)) 
     else:
         exit(main(args))
