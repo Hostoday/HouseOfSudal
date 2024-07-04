@@ -78,4 +78,14 @@ bash inf.sh 로 train.sh파일을 수정해 가면 다양한 환경에서 실험
 huggingface/transformers (https://github.com/huggingface/transformers)  
 Bllossome (Teddysum) (https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B)  
 국립국어원 인공지능 (AI)말평 (https://kli.korean.go.kr/benchmark)  
-# Korean_DCS_2024
+# Korean_DCS_2024 Baseline Score
+
+MLP-KTLim/llama-3-Korean-Bllossom-8B
+![image](https://github.com/YEonleo/Korean_DCS_2024/assets/90837906/cc8fc450-fbda-4876-b1be-a552c787e994)
+
+
+beomi/Llama-3-Open-Ko-8B
+![image](https://github.com/YEonleo/Korean_DCS_2024/assets/90837906/fcd626cd-31ce-4cb3-90ea-43f2831c4342)
+
+
+
