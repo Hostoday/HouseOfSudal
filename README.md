@@ -87,5 +87,11 @@ MLP-KTLim/llama-3-Korean-Bllossom-8B
 beomi/Llama-3-Open-Ko-8B
 ![image](https://github.com/YEonleo/Korean_DCS_2024/assets/90837906/fcd626cd-31ce-4cb3-90ea-43f2831c4342)
 
+beomi/Solar-Ko-Recovery-11B
+실험중
+
+beomi/gemma-ko-7b
+실험중
+
 
 
