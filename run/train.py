@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch.optim import AdamW
 from transformers import (AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, 
                           Trainer, TrainingArguments, get_cosine_schedule_with_warmup, 
-                          get_linear_schedule_with_warmup)
+                          get_linear_schedule_with_warmup,EarlyStoppingCallback,AutoModelForSeq2SeqLM)
 from trl import SFTTrainer, SFTConfig
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model, TaskType
 from src.data import CustomDataset, DataCollatorForSupervisedDataset
@@ -20,7 +20,9 @@ from transformers import TrainerCallback, TrainerState, TrainerControl
 import logging
 from datetime import datetime, timezone, timedelta
 
-from datasets import Dataset
+from datasets import Dataset , load_metric
+
+import numpy as np
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -33,6 +35,7 @@ class CustomCallback(TrainerCallback):
         logging.info(f"Log: {state.log_history[-1]}")
         print(f"Log: {state.log_history[-1]}")
 
+
 def init_model(args):
     """Initialize the model with 4-bit quantization and LoRA configuration."""
     quantization_config = BitsAndBytesConfig(
@@ -42,19 +45,20 @@ def init_model(args):
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type='nf4'
     )
-    
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id,
         torch_dtype=torch.bfloat16,
         device_map='auto',
+        # attn_implementation="flash_attention_2",
         quantization_config=quantization_config,
     )
+
     peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "down_proj", "up_proj"],
-        r=8,
-        lora_alpha=16,
-        lora_dropout=0.05,
+    task_type=TaskType.CAUSAL_LM,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "down_proj", "up_proj"],
+    r=8,
+    lora_alpha=16,
+    lora_dropout=0.05,
     )
     
     model.config.use_cache = False
@@ -70,26 +74,30 @@ def init_tokenizer(args):
     return tokenizer
 
 def loss_fn(target, outputs, tokenizer):
-    criterion = nn.CrossEntropyLoss(ignore_index=-100)
+    criterion = nn.CrossEntropyLoss(ignore_index=-100) 
     logits = outputs.logits.view(-1, outputs.logits.size(-1))
     target = target.view(-1)
     loss = criterion(logits, target)
     return loss
 
 def train_model(args):
-    model, peft_config = init_model(args)
-    model = prepare_model_for_kbit_training(model)
-    model = get_peft_model(model, peft_config)
+    
     set_random_seed(args.seed)
     tokenizer = init_tokenizer(args)
 
-    train_dataset = CustomDataset("resource/data/일상대화요약_train.json", tokenizer)
-    valid_dataset = CustomDataset("resource/data/일상대화요약_dev.json", tokenizer)
+    train_dataset = CustomDataset("resource/data/일상대화요약_train.json", tokenizer, args.prompt, args.prompt_type)
+    valid_dataset = CustomDataset("resource/data/일상대화요약_dev.json", tokenizer, args.prompt, args.prompt_type)
 
     train_dataset = Dataset.from_dict({'input_ids': train_dataset.inp, 'labels': train_dataset.label})
     valid_dataset = Dataset.from_dict({'input_ids': valid_dataset.inp, 'labels': valid_dataset.label})
     
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+    
+    model, peft_config = init_model(args)
+    model.resize_token_embeddings(len(tokenizer))
+    model = prepare_model_for_kbit_training(model)
+    model = get_peft_model(model, peft_config)
+
 
     training_args = TrainingArguments(
         save_strategy="epoch",
@@ -99,6 +107,7 @@ def train_model(args):
         do_train=True,
         do_eval=False,
         optim="adamw_bnb_8bit",
+        lr_scheduler_type="cosine",
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epoch,
@@ -116,8 +125,50 @@ def train_model(args):
         callbacks=[CustomCallback()],
     )
     
+    # training_args = SFTConfig(
+    #     output_dir=f'{args.save_dir}/{args.model_id}/{datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d-%H-%M")}',
+    #     overwrite_output_dir=True,
+    #     do_train=True,
+    #     do_eval=False,
+    #     optim="adamw_bnb_8bit",
+    #     per_device_train_batch_size=args.batch_size,
+    #     per_device_eval_batch_size=args.batch_size,
+    #     gradient_accumulation_steps=args.gradient_accumulation_steps,
+    #     learning_rate=args.lr,
+    #     weight_decay=0.01,
+    #     num_train_epochs=args.epoch,
+    #     max_steps=-1,
+    #     lr_scheduler_type="cosine",
+    #     warmup_steps=args.warmup_steps,
+    #     log_level="info",
+    #     logging_steps=10,
+    #     save_strategy="steps",
+    #     evaluation_strategy="epoch",
+    #     gradient_checkpointing=True,
+    #     gradient_checkpointing_kwargs={'use_reentrant':False},
+    #     max_seq_length=1024,
+    #     bf16=True,
+    #     #eval_accumulation_steps=4,
+    #     packing=True,
+    #     seed=42,
+    #     save_steps = 10,
+
+    # )
+
+    # trainer = SFTTrainer(
+    #     model=model,
+    #     tokenizer=tokenizer,
+    #     train_dataset=train_dataset,
+    #     #eval_dataset=valid_dataset,
+    #     peft_config=peft_config,
+    #     data_collator=data_collator,
+    #     args=training_args,
+    #     #compute_metrics=None,
+    #     callbacks=[CustomCallback()],
+        
+    # )
+    
     trainer.train()
-    trainer.save_model()
 
 def main(args):
     accelerator = Accelerator()
@@ -129,6 +180,7 @@ def main(args):
     valid_dataset = CustomDataset("resource/data/일상대화요약_dev.json", tokenizer)
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
@@ -145,8 +197,6 @@ def main(args):
                  if args.scheduler_type == "cosine" 
                  else get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps))
     
-    model, optimizer, train_dataloader, scheduler = accelerator.prepare(model, optimizer, train_dataloader, scheduler)
-
     step = 0
     best_eval_loss = float('inf')
     saved_models = []
@@ -159,10 +209,10 @@ def main(args):
             labels = batch["labels"]
             outputs = model(inputs)
             loss = loss_fn(labels, outputs, tokenizer) / args.gradient_accumulation_steps
-            accelerator.backward(loss)
+            loss.backward()
             step += 1
             
-            if step % args.gradient_accumulation_steps == 0:
+            if step % args.gradient_accumulation_steps == 0: 
                 print(f"Loss: {loss.item()}, Step: {step}")
                 wandb.log({"loss": loss.item(), "step": step})
                 optimizer.step()

@@ -7,8 +7,9 @@ import torch
 import numpy
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
-from src.data import CustomDataset, DataCollatorForSupervisedDataset
+from src.data import CustomDataset, DataCollatorForSupervisedDataset, DataCollatorForInferenceDataset
 from peft import PeftModel, PeftConfig
+import os
 
 
 # fmt: off
@@ -20,12 +21,33 @@ g.add_argument("--model_id", type=str, required=True, help="huggingface model id
 g.add_argument("--tokenizer", type=str, help="huggingface tokenizer")
 g.add_argument("--device", type=str, required=True, help="device to load the model")
 g.add_argument("--model_ckpt_path", type=str, required=True, help="model checkpoint path")
-g.add_argument("--batch_size", type=int, default=4, help="batch size")
+g.add_argument("--batch_size", type=int, default=2, help="batch size")
+g.add_argument("--prompt",type=str,default = "You are a helpful AI assistant. Please summarize the main topics of the user's conversation. 당신은 유능한 AI 어시스턴트입니다. 사용자의 대화를 통해 주요 주제에 대해 요약해주세요.")
 # fmt: on
-
 
 def main(args):
 
+
+    if args.tokenizer == None:
+        args.tokenizer = args.model_id
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    # Set padding_side to left
+    tokenizer.padding_side = "left"
+    tokenizer.pad_token = tokenizer.eos_token
+    terminators = [
+        tokenizer.eos_token_id,
+        tokenizer.convert_tokens_to_ids("<|eot_id|>")
+    ]
+
+    dataset = CustomDataset("resource/data/일상대화요약_test.json", tokenizer, args.prompt)
+
+    test_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=DataCollatorForInferenceDataset(tokenizer),
+    )
+    
     config = PeftConfig.from_pretrained(args.model_ckpt_path)
     quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -41,30 +63,11 @@ def main(args):
         device_map=args.device,
         quantization_config=quantization_config,
     )
+    model.resize_token_embeddings(len(tokenizer))
     model = PeftModel.from_pretrained(model, args.model_ckpt_path)
     model.eval()
     model.to(args.device)
     torch.set_grad_enabled(False)
-
-    if args.tokenizer == None:
-        args.tokenizer = args.model_id
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    # Set padding_side to left
-    tokenizer.padding_side = "left"
-    tokenizer.pad_token = tokenizer.eos_token
-    terminators = [
-        tokenizer.eos_token_id,
-        tokenizer.convert_tokens_to_ids("<|eot_id|>")
-    ]
-
-    dataset = CustomDataset("resource/data/일상대화요약_test.json", tokenizer)
-
-    test_dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=DataCollatorForSupervisedDataset(tokenizer),
-    )
 
     with open("resource/data/일상대화요약_test.json", "r") as f:
         result = json.load(f)
@@ -73,7 +76,8 @@ def main(args):
     for batch in tqdm(test_dataloader, desc="Test"):
         inp = batch["input_ids"].to(args.device)
         attention_mask = batch["attention_mask"].to(args.device)
-
+        speakermap = batch["speaker_maps"]
+        
         outputs = model.generate(
             inp,
             attention_mask=attention_mask,
@@ -84,15 +88,24 @@ def main(args):
             early_stopping=True
         )
 
-        generated_texts = [tokenizer.decode(output[inp.shape[-1]:], skip_special_tokens=True) for output in outputs]
-        print(generated_texts)
+        generated_texts = []
+        for output in outputs:
+            text = tokenizer.decode(output[inp.shape[-1]:], skip_special_tokens=False)
+            generated_texts.append(text)
 
+        # Replace special tokens with speaker IDs
         for i, text in enumerate(generated_texts):
+            speaker_map = speakermap[i]
+            for token, speaker in speaker_map.items():
+                text = text.replace(speaker, token)
+            text = text.replace("<|end_of_text|>", "")
+            text = text.replace("<|begin_of_text|>", "")
             result[batch_start_idx + i]["output"] = text
+            # print(result[batch_start_idx + i]["output"])
 
         batch_start_idx += len(generated_texts)
 
-    with open(args.output, "w", encoding="utf-8") as f:
+    with open(f"inference/{args.output}", "w", encoding="utf-8") as f:
         f.write(json.dumps(result, ensure_ascii=False, indent=4))
 
 

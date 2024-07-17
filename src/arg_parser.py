@@ -20,7 +20,12 @@ def get_args():
     g.add_argument("--weight_decay", type=float, default=0.01, help="weight decay")
     g.add_argument("--save_total_limit", type=int, default=5, help="save total limit")
     g.add_argument("--max_seq_len", type=int, default=1024, help="max sequence length")
-    
+    g.add_argument("--prompt_type", type=str, default='mode_with_special_tokens', help="prompt type")
+    g.add_argument("--prompt", type=str, default="You are a helpful AI assistant. Please answer the user's questions kindly. 당신은 유능한 AI 어시스턴트 입니다. 사용자의 질문에 대해 친절하게 답변해주세요.", help="prompt")
+    g.add_argument("--min_length",type=int, default=82, help = "length minimize")
+    g.add_argument("--max_length",type=int, default=2048, help = "length minimize")
+
+
     g = parser.add_argument_group("Quantization Parameter")
     g.add_argument("--quantization", action="store_true", help="quantization flag")
     g.add_argument("--4bit", action="store_true", help="4bit quantization flag")
@@ -30,7 +35,7 @@ def get_args():
     g.add_argument("--lora_dropout", type=float, default=0.05, help="lora dropout value")
     
     g = parser.add_argument_group("Wandb Options")
-    g.add_argument("--wandb_run_name", type=str, default=datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d-%H-%M"), help="wandb run name")
+    g.add_argument("--wandb_run_name", type=str, default=f'{datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d-%H-%M")}', help="wandb run name")
     g.add_argument("--wandb_project_name", type=str, default="Korean_DCS_2024", help="wandb project name")
     g.add_argument("--wandb_entity", type=str, default="YUSANGYEON", help="wandb entity name")
     
